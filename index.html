@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>NOVA TV trailer player</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #player { position: absolute; inset: 0; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+<!--
+  Hosts YouTube's official embedded player for the NOVA TV app (LG webOS).
+  YouTube's embed refuses pages without a web origin (error 153), so the TV app loads this page in an iframe.
+  Usage: index.html?v=<YouTube video id>
+  It talks to its parent window with postMessage:
+    out → { nova: 'state', state, time, duration } | { nova: 'error', code } | { nova: 'ready' }
+    in  ← { nova: 'play' | 'pause' | 'toggle' | 'seekBy', seconds }
+-->
+<div id="player"></div>
+<script>
+  var id = (new URLSearchParams(location.search).get('v') || '').replace(/[^\w-]/g, '');
+  var player = null;
+  function tell(msg) { try { parent.postMessage(Object.assign({ nova: 'x' }, msg), '*'); } catch (e) {} }
+  function status() {
+    if (!player || !player.getPlayerState) return;
+    tell({ nova: 'state', state: player.getPlayerState(), time: player.getCurrentTime() || 0, duration: player.getDuration() || 0 });
+  }
+  window.onYouTubeIframeAPIReady = function () {
+    if (!id) { tell({ nova: 'error', code: 'no-id' }); return; }
+    player = new YT.Player('player', {
+      videoId: id,
+      playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, disablekb: 1 },
+      events: {
+        onReady: function () { tell({ nova: 'ready' }); player.playVideo(); status(); },
+        onStateChange: status,
+        onError: function (e) { tell({ nova: 'error', code: e.data }); }
+      }
+    });
+    setInterval(status, 1000);
+  };
+  window.addEventListener('message', function (e) {
+    var m = e.data || {};
+    if (!player || !m.nova) return;
+    if (m.nova === 'play') player.playVideo();
+    else if (m.nova === 'pause') player.pauseVideo();
+    else if (m.nova === 'toggle') { if (player.getPlayerState() === 1) player.pauseVideo(); else player.playVideo(); }
+    else if (m.nova === 'seekBy') player.seekTo(Math.max(0, (player.getCurrentTime() || 0) + (Number(m.seconds) || 0)), true);
+    status();
+  });
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
