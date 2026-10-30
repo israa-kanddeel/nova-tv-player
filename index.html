@@ -14,9 +14,9 @@
 <!--
   Hosts YouTube's official embedded player for the NOVA TV app (LG webOS).
   YouTube's embed refuses pages without a web origin (error 153), so the TV app loads this page in an iframe.
-  Usage: index.html?v=<YouTube video id>[&cue=1]   (cue=1: load paused and wait for a "play" message)
+  Usage: index.html?v=<YouTube video id>[&cue=1]   (cue=1: buffer the start muted, rest at 0:00 and wait for a "play" message)
   It talks to its parent window with postMessage:
-    out → { nova: 'state', state, time, duration } | { nova: 'error', code } | { nova: 'ready' }
+    out → { nova: 'state', state, time, duration } | { nova: 'error', code } | { nova: 'ready' } | { nova: 'primed' }
     in  ← { nova: 'play' | 'pause' | 'toggle' | 'seekBy', seconds }
 -->
 <div id="player"></div>
@@ -26,6 +26,8 @@
   var player = null;
   // Whether the video should be running; YouTube sometimes leaves a started video 'unstarted' (-1) or 'cued' (5).
   var wantPlay = params.get('cue') !== '1';
+  // cue=1: play muted until the first frame shows, then pause at 0:00, so a later 'play' starts instantly.
+  var preroll = !wantPlay;
   function tell(msg) { try { parent.postMessage(Object.assign({ nova: 'x' }, msg), '*'); } catch (e) {} }
   function status() {
     if (!player || !player.getPlayerState) return;
@@ -37,8 +39,23 @@
       videoId: id,
       playerVars: { autoplay: wantPlay ? 1 : 0, controls: 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, disablekb: 1 },
       events: {
-        onReady: function () { tell({ nova: 'ready' }); if (wantPlay) player.playVideo(); status(); },
-        onStateChange: function (e) { status(); if (wantPlay && (e.data === -1 || e.data === 5)) setTimeout(nudge, 400); },
+        onReady: function () {
+          tell({ nova: 'ready' });
+          if (preroll) player.mute();
+          if (wantPlay || preroll) player.playVideo();
+          status();
+        },
+        onStateChange: function (e) {
+          if (preroll && e.data === 1) {
+            preroll = false;
+            player.pauseVideo();
+            player.seekTo(0, true);
+            tell({ nova: 'primed' });
+            return;
+          }
+          status();
+          if (e.data === -1 || e.data === 5) setTimeout(nudge, 400);
+        },
         onError: function (e) { tell({ nova: 'error', code: e.data }); }
       }
     });
@@ -46,12 +63,12 @@
   };
   function nudge() {
     var st = player && player.getPlayerState ? player.getPlayerState() : null;
-    if (wantPlay && (st === -1 || st === 5)) player.playVideo();
+    if ((wantPlay || preroll) && (st === -1 || st === 5)) player.playVideo();
   }
   window.addEventListener('message', function (e) {
     var m = e.data || {};
     if (!player || !m.nova) return;
-    if (m.nova === 'play') { wantPlay = true; player.playVideo(); }
+    if (m.nova === 'play') { wantPlay = true; preroll = false; player.unMute(); player.playVideo(); }
     else if (m.nova === 'pause') { wantPlay = false; player.pauseVideo(); }
     else if (m.nova === 'toggle') { wantPlay = player.getPlayerState() !== 1; if (wantPlay) player.playVideo(); else player.pauseVideo(); }
     else if (m.nova === 'seekBy') player.seekTo(Math.max(0, (player.getCurrentTime() || 0) + (Number(m.seconds) || 0)), true);
